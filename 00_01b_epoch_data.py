@@ -19,24 +19,9 @@ plt.rcParams.update({
 })
 
 # %%
-
 root = Path("/Volumes/T7/Projects/NBM-TUS/EEG/sub-3001")
-
-fname = root / "Day 1" / "sub3001-PreTUS-Rest.smrx"
-
-DATA_DIR = Path("../Pilot1 - Tao Liu 20251118")
-DATA_FILE = DATA_DIR / "[NBM-TUS] Tao Task.smr"
-
-DATA_DIR = Path("../Pilot2 - Faissal Sharif 20251119")
-DATA_FILE = DATA_DIR / "[NBM-TUS] Faissal Posner Main.smr"
-
-DATA_DIR = Path("../Pilot3 - Bo Yin 20251120")
-DATA_FILE = DATA_DIR / "[NBM-TUS] Bo Posner Main.smr"
-
-DATA_DIR = Path("../Pilot5 - PD Patient 20251212")
-DATA_FILE = DATA_DIR / "[NBM-TUS] Posner-Main.smr"
-
-DATA_DIR.exists()
+fname = root / "Day 3" / "sub3001-Day3-PreTUS-Posner.smrx"
+DATA_FILE = fname
 
 # %%
 importer = SmrImporter(DATA_FILE)
@@ -54,27 +39,14 @@ eeg_chans = [
     "P3",
     "Pz",
     "P4",
+    "PO3",
+    "POz",
+    "PO4",
     "O1",
     "Oz",
     "O2",
 ]
 
-eeg_chan_pos = {
-    "FP1": (0, 0),
-    "FP2": (0, 2),
-    "F3": (1, 0),
-    "Fz": (1, 1),
-    "F4": (1, 2),
-    "C3": (2, 0),
-    "Cz": (2, 1),
-    "C4": (2, 2),
-    "P3": (3, 0),
-    "Pz": (3, 1),
-    "P4": (3, 2),
-    "O1": (4, 0),
-    "Oz": (4, 1),
-    "O2": (4, 2),
-}
 eeg_chan_inds = [importer.ch_names.index(ch) for ch in eeg_chans]
 n_channels = len(eeg_chan_inds)
 
@@ -86,7 +58,10 @@ trigger_chans = ["FIO", "DAC"]
 trigger_chan_inds = [importer.ch_names.index(ch) for ch in trigger_chans]
 trigger_data = importer.data[trigger_chan_inds, :]
 
-other_chans = ["ECG", "AccX", "AccY", "AccZ"]
+other_chans = []
+for ch in ["ECG", "EOG", "AcLX", "AcLY", "AcLZ", "AcRX", "AcRY", "AcRZ"]:
+    if ch in importer.ch_names:
+        other_chans.append(ch)
 other_chan_inds = [importer.ch_names.index(ch) for ch in other_chans]
 other_data = importer.data[other_chan_inds, :]
 
@@ -98,20 +73,135 @@ logger.info(
 # %%
 # Run pre-preocessing on longitudinal data
 
-# Re-ferencing
-
 # Filtering (highpass, notch...)
 eeg_data = highpass(eeg_data, fs=float(importer.fs), cutoff_freq=0.5)
 # eeg_data = bandpass(eeg_data, fs=float(importer.fs), band_freq=(8, 12))
 other_data = highpass(other_data, fs=float(importer.fs), cutoff_freq=0.5)
 
-
 # %% Epoch data
-timestamps = importer.get_event_timestamps("TrlSt")
+# Determine trials using FIO and DAC channels
+# Each trial is characterised by 4 FIO events. The first of these 4 FIO events is the fixation cross (trial start).
+# We first find all FIO threshold crossings, and their corresponding DAC levels to define the trials.
+
+# Find all crossings on FIO
+fio_idx = importer.ch_names.index("FIO")
+dac_idx = importer.ch_names.index("DAC")
+fio = importer.data[fio_idx, :]
+dac = importer.data[dac_idx, :]
+fs = importer.fs
+
+def find_threshold_crossings(
+    signal: np.ndarray, threshold: float, skip: int
+) -> list[int]:
+    """
+    Return indices where ``signal`` first crosses ``threshold`` and skip ``skip`` samples before searching again.
+    """
+    if signal.ndim != 1:
+        raise ValueError("Signal must be 1-D")
+    if skip < 1:
+        raise ValueError("Skip must be >= 1")
+
+    hits: list[int] = []
+    cursor = 0
+    total = signal.shape[0]
+
+    while cursor < total:
+        above = np.flatnonzero(signal[cursor:] >= threshold)
+        if above.size == 0:
+            break
+        idx = cursor + int(above[0])
+        hits.append(idx)
+        cursor = idx + skip
+
+    return hits
+
+diff_fio = np.diff(fio)
+skip_samples = int(fs * 0.1)
+crossings = find_threshold_crossings(diff_fio, 100000, skip_samples)
+crossings = np.array(crossings)
+
+# Compute DAC values following each crossing (75ms to 125ms after the crossing)
+window_start = int(fs * 0.075)
+window_end = int(fs * 0.125)
+dac_vals = []
+for hit in crossings:
+    val = dac[hit + window_start : hit + window_end].mean()
+    dac_vals.append(val)
+dac_vals = np.array(dac_vals)
+
+# Find 8 peaks with padded range
+from scipy.signal import find_peaks
+hist, bins = np.histogram(dac_vals, bins=1048, range=(0, 2250000), density=True)
+peaks, _ = find_peaks(hist, height=0.5e-5)
+peak_vals = bins[peaks]
+
+level_names = [
+    "fixation_cross",
+    "left_arrow",
+    "right_arrow",
+    "both_arrows",
+    "left_target",
+    "right_target",
+    "left_button_press",
+    "right_button_press",
+]
+
+sorted_peaks = sorted(peak_vals)
+levels = {name: sorted_peaks[i] for i, name in enumerate(level_names)}
+
+def match_val_to_levels(
+    val: float, levels: dict[str, float], tolerance: float = 125000
+) -> str | None:
+    """
+    Return the name of the closest ``levels`` entry to ``val`` if it is within ``tolerance``.
+    """
+    if not levels:
+        raise ValueError("levels mapping must not be empty")
+
+    names, values = zip(*levels.items())
+    values_arr = np.asarray(values, dtype=float)
+    diffs = np.abs(values_arr - float(val))
+    best_idx = int(np.argmin(diffs))
+
+    if diffs[best_idx] <= tolerance:
+        return names[best_idx]
+
+    return None
+
+# Label all crossings
+labels = [match_val_to_levels(v, levels) for v in dac_vals]
+
+# Filter out crossings that are None (noise/block starts)
+valid_indices = [i for i, label in enumerate(labels) if label is not None]
+filtered_crossings = crossings[valid_indices]
+filtered_labels = [labels[i] for i in valid_indices]
+
+# Group into trials of 4 consecutive crossings
+trials = []
+trial_labels = []
+for i in range(0, len(filtered_crossings), 4):
+    group = filtered_crossings[i:i+4]
+    group_lbl = filtered_labels[i:i+4]
+    if len(group) == 4:
+        # Check that it's a valid sequence of trial events:
+        # fixation_cross -> cue -> target -> response
+        is_valid = (
+            group_lbl[0] == "fixation_cross" and
+            group_lbl[1] in ["left_arrow", "right_arrow", "both_arrows"] and
+            group_lbl[2] in ["left_target", "right_target"] and
+            group_lbl[3] in ["left_button_press", "right_button_press"]
+        )
+        if is_valid:
+            trials.append(group)
+            trial_labels.append(group_lbl)
+
+logger.info(f"Detected {len(trials)} valid trials from FIO/DAC channels.")
+
+# Use the first event of each trial (fixation_cross) as the trial start timestamp
+timestamps = np.array([t[0] for t in trials])
 
 # %%
 EPOCH_LIMS = (-3, 5)
-
 
 def epoch_data(data, timestamps, fs, epoch_lims: tuple[float, float] = (-3, 5)):
     epoch_lims_samp = (int(fs * epoch_lims[0]), int(fs * epoch_lims[1]))
@@ -174,33 +264,15 @@ for ch in range(plot_data.shape[1]):
 fig.tight_layout()
 
 # %%
-dac_vals = trigger_epochs[:, 1, :].flatten()
-
-hist, bins = np.histogram(dac_vals, bins=1048, density=True)
-
+# %% Plot histogram of crossing DAC values and peak detection
 fig, ax = plt.subplots(1, 1, figsize=(8, 4))
 ax.plot(bins[:-1], hist, alpha=0.5)
+ax.scatter(peak_vals, [hist[p] for p in peaks], c="r")
+ax.set_title("Histogram of DAC values at FIO crossings")
+ax.set_xlabel("DAC value")
+ax.set_ylabel("Density")
 
-from scipy.signal import find_peaks
-
-peaks, _ = find_peaks(hist, height=0.5e-5)
-bins[peaks]
-
-ax.scatter(bins[peaks], hist[peaks], c="r")
-
-# %%
-
-level_names = [
-    "fixation_cross",
-    "left_arrow",
-    "right_arrow",
-    "both_arrows",
-    "left_target",
-    "right_target",
-    "left_button_press",
-    "right_button_press",
-]
-
+# Keep levels_parser definitions
 levels_parser = dict()
 levels_parser["fixation_cross"] = "fixation_cross"
 levels_parser["left_arrow"] = "left"
@@ -211,83 +283,20 @@ levels_parser["right_target"] = "right"
 levels_parser["left_button_press"] = "left"
 levels_parser["right_button_press"] = "right"
 
-levels = dict()
-for kk, level_name in enumerate(level_names):
-    levels[level_name] = bins[peaks[kk]]
-
 
 # %%
-def find_threshold_crossings(
-    signal: np.ndarray, threshold: float, skip: int
-) -> list[int]:
-    """
-    Return indices where ``signal`` first crosses ``threshold`` and skip ``skip`` samples before searching again.
-    """
-    if signal.ndim != 1:
-        raise ValueError("Signal must be 1-D")
-    if skip < 1:
-        raise ValueError("Skip must be >= 1")
-
-    hits: list[int] = []
-    cursor = 0
-    total = signal.shape[0]
-
-    while cursor < total:
-        above = np.flatnonzero(signal[cursor:] >= threshold)
-        if above.size == 0:
-            break
-        idx = cursor + int(above[0])
-        hits.append(idx)
-        cursor = idx + skip
-
-    return hits
-
-
-def match_val_to_levels(
-    val: float, levels: dict[str, float], tolerance: float = 25_000
-) -> str | None:
-    """
-    Return the name of the closest ``levels`` entry to ``val`` if it is within ``tolerance``.
-    """
-    if not levels:
-        raise ValueError("levels mapping must not be empty")
-
-    names, values = zip(*levels.items())
-    values_arr = np.asarray(values, dtype=float)
-    diffs = np.abs(values_arr - float(val))
-    best_idx = int(np.argmin(diffs))
-
-    if diffs[best_idx] <= tolerance:
-        return names[best_idx]
-
-    return None
-
-
-# %%
-roi_ix = (np.array((-0.1, 3)) + 3.0).astype(int) * importer.fs
-n_epochs = trigger_epochs.shape[0]
-
-rts = []
+# %% Build hits and events arrays for Epochs
+epoch_lims_samp = (int(importer.fs * EPOCH_LIMS[0]), int(importer.fs * EPOCH_LIMS[1]))
 hits_cont = []
 events_cont = []
-for epoch in range(n_epochs):
-    fio_chan = trigger_epochs[epoch, 0, int(roi_ix[0]) : int(roi_ix[1])]
-    hits = find_threshold_crossings(np.diff(fio_chan), 100_000, 512)[:4]
-    hits = [int(round(hit + roi_ix[0])) for hit in hits]
-    hits_cont.append(hits)
-    assert len(hits) == 4, f"Epoch {epoch} does not have 4 hits: {hits}"
 
-    level_log = []
-    for hit in hits:
-        level = match_val_to_levels(
-            trigger_epochs[
-                epoch, 1, hit + int(4096 * 0.075) : hit + int(4096 * 0.125)
-            ].mean(),
-            levels,
-        )
-        level_log.append(levels_parser[level])
+for trial_crossings, trial_lbl in zip(trials, trial_labels):
+    c_0 = trial_crossings[0]
+    hits = [int(round(hit - c_0 - epoch_lims_samp[0])) for hit in trial_crossings]
+    hits_cont.append(hits)
+    
+    level_log = [levels_parser[lbl] for lbl in trial_lbl]
     events_cont.append(level_log)
-    print(f"Epoch {epoch}: {hits}, levels={level_log}")
 
 epochs = Epochs(
     eeg_data=eeg_epochs,

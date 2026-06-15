@@ -90,57 +90,52 @@ class Epochs:
         return selected_indices
 
     def query(self, query_str: str):
-        match query_str:
-            case "mistakes":
-                seqs = [
-                    ["fixation_cross", "left", "left", "right"],
-                    ["fixation_cross", "left", "right", "left"],
-                    ["fixation_cross", "right", "right", "left"],
-                    ["fixation_cross", "right", "left", "right"],
-                    ["fixation_cross", "both", "left", "right"],
-                    ["fixation_cross", "both", "right", "left"],
-                ]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        if query_str == "mistakes":
+            seqs = [
+                ["fixation_cross", "left", "left", "right"],
+                ["fixation_cross", "left", "right", "left"],
+                ["fixation_cross", "right", "right", "left"],
+                ["fixation_cross", "right", "left", "right"],
+                ["fixation_cross", "both", "left", "right"],
+                ["fixation_cross", "both", "right", "left"],
+            ]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
 
-            case "congruent-left":  # Arrow points left, target appears on the left
-                seqs = [["fixation_cross", "left", "left", "left"]]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
-            case "congruent-right":
-                seqs = [["fixation_cross", "right", "right", "right"]]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
-            case "congruent-all":
-                seqs = [
-                    ["fixation_cross", "right", "right", "right"],
-                    ["fixation_cross", "left", "left", "left"],
-                ]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
-            case (
-                "incongruent-left"
-            ):  # Arrow points right, but target appears on the left
-                seqs = [["fixation_cross", "right", "left", "left"]]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
-            case (
-                "incongruent-right"
-            ):  # Arrow points left, but target appears on the right
-                seqs = [["fixation_cross", "left", "right", "right"]]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
-            case "incongruent-all":
-                seqs = [
-                    ["fixation_cross", "left", "right", "right"],
-                    ["fixation_cross", "right", "left", "left"],
-                ]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
-            case "neutral-left":  # Arrow points both ways, target on the left
-                seqs = [["fixation_cross", "both", "left", "left"]]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
-            case "neutral-right":  # Arrow points both ways, target on the right
-                seqs = [["fixation_cross", "both", "right", "right"]]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
-            case "neutral-all":
-                seqs = [
-                    ["fixation_cross", "both", "left", "left"],
-                    ["fixation_cross", "both", "right", "right"],
-                ]
-                return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "congruent-left":  # Arrow points left, target appears on the left
+            seqs = [["fixation_cross", "left", "left", "left"]]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "congruent-right":
+            seqs = [["fixation_cross", "right", "right", "right"]]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "congruent-all":
+            seqs = [
+                ["fixation_cross", "right", "right", "right"],
+                ["fixation_cross", "left", "left", "left"],
+            ]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "incongruent-left":  # Arrow points right, but target appears on the left
+            seqs = [["fixation_cross", "right", "left", "left"]]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "incongruent-right":  # Arrow points left, but target appears on the right
+            seqs = [["fixation_cross", "left", "right", "right"]]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "incongruent-all":
+            seqs = [
+                ["fixation_cross", "left", "right", "right"],
+                ["fixation_cross", "right", "left", "left"],
+            ]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "neutral-left":  # Arrow points both ways, target on the left
+            seqs = [["fixation_cross", "both", "left", "left"]]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "neutral-right":  # Arrow points both ways, target on the right
+            seqs = [["fixation_cross", "both", "right", "right"]]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
+        elif query_str == "neutral-all":
+            seqs = [
+                ["fixation_cross", "both", "left", "left"],
+                ["fixation_cross", "both", "right", "right"],
+            ]
+            return self.select_epochs_from_indices(self.indices_from_query(seqs))
 
         return None

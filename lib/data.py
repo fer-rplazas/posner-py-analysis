@@ -105,28 +105,140 @@ def causal_notch(data, fs: float, notch_freq: float = 50, quality_factor: float 
     return filtered_data
 
 
+class MockTimes:
+    def __init__(self, magnitude):
+        self.magnitude = np.array(magnitude)
+
+
+class MockEvent:
+    def __init__(self, name, times_in_seconds):
+        self.name = name
+        self.times = MockTimes(times_in_seconds)
+
+
 class SmrImporter:
-    """Reads signals and metadata (sampling frequency ``fs``, channel names ``ch_names``) from SMR file"""
+    """Reads signals and metadata (sampling frequency ``fs``, channel names ``ch_names``) from SMR/SMRX file"""
 
-    def __init__(self, fname: os.PathLike | str):
-        analog_signal = (
-            Spike2IO(filename=str(fname)).read()[0].segments[0].analogsignals[0]
-        )
+    def __init__(self, fname: "os.PathLike | str"):
+        fname_str = str(fname)
+        if fname_str.lower().endswith(".smrx"):
+            import subprocess
+            import pickle
+            from pathlib import Path
 
-        self.events = Spike2IO(filename=str(fname)).read()[0].segments[0].events
+            lib_dir = Path(__file__).parent
+            sonpy_python = lib_dir.parent / ".pixi" / "envs" / "sonpy" / "bin" / "python"
 
-        self.event_names = [event.name for event in self.events]
-        print(self.event_names)
+            if not sonpy_python.exists():
+                raise FileNotFoundError(
+                    f"Could not find the 'sonpy' environment python binary at: {sonpy_python}\n"
+                    "Please make sure you have run 'pixi install --all' to set up both default and sonpy environments."
+                )
 
-        self.ch_names = analog_signal.array_annotations["channel_names"].tolist()
+            # Subprocess python script to read SMRX using sonpy in the 3.9 environment
+            script = """
+import sys
+import pickle
+import numpy as np
+from sonpy import lib as sp
 
-        print(self.ch_names)
+fname_str = sys.argv[1]
+f = sp.SonFile(fname_str, True)
+if f.GetOpenError() != 0:
+    sys.exit(f"Error opening file: {sp.GetErrorString(f.GetOpenError())}")
 
-        self.ch_dict = {name: i for i, name in enumerate(self.ch_names)}
+# Find active analog channels
+analog_chans = []
+for chan in range(f.MaxChannels()):
+    t = f.ChannelType(chan)
+    if t in (sp.DataType.Adc, sp.DataType.RealWave):
+        analog_chans.append(chan)
 
-        self.fs = analog_signal.sampling_rate.magnitude
+if not analog_chans:
+    sys.exit("No active analog channels found")
 
-        self.data = analog_signal.magnitude.T
+ref_chan = analog_chans[0]
+timebase = f.GetTimeBase()
+ref_divide = f.ChannelDivide(ref_chan)
+fs = 1.0 / (timebase * ref_divide)
+
+max_time = f.ChannelMaxTime(ref_chan)
+n_points = int(max_time / ref_divide)
+
+ch_names = []
+data_list = []
+for chan in analog_chans:
+    ch_names.append(f.GetChannelTitle(chan))
+    data_list.append(f.ReadFloats(chan, n_points, 0))
+
+data = np.array(data_list, dtype=np.float32)
+
+# Read event channels
+events = []
+for chan in range(f.MaxChannels()):
+    t = f.ChannelType(chan)
+    if t in (sp.DataType.EventFall, sp.DataType.EventRise, sp.DataType.EventBoth):
+        name = f.GetChannelTitle(chan)
+        max_t = f.ChannelMaxTime(chan)
+        if max_t >= 0:
+            ticks = f.ReadEvents(chan, 100000, 0, max_t + 1)
+            times_sec = np.array(ticks, dtype=np.float64) * timebase
+        else:
+            times_sec = np.array([], dtype=np.float64)
+        events.append({"name": name, "times": times_sec})
+
+result = {
+    "fs": fs,
+    "ch_names": ch_names,
+    "data": data,
+    "events": events,
+}
+
+sys.stdout.buffer.write(pickle.dumps(result))
+"""
+            env = os.environ.copy()
+            env["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+            res = subprocess.run(
+                [str(sonpy_python), "-c", script, fname_str],
+                capture_output=True,
+                env=env
+            )
+
+            if res.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to read SMRX file using sonpy environment subprocess:\n"
+                    f"{res.stderr.decode('utf-8')}"
+                )
+
+            result = pickle.loads(res.stdout)
+
+            self.fs = result["fs"]
+            self.ch_names = result["ch_names"]
+            self.data = result["data"]
+            self.ch_dict = {name: i for i, name in enumerate(self.ch_names)}
+
+            self.events = []
+            for ev in result["events"]:
+                self.events.append(MockEvent(ev["name"], ev["times"]))
+
+            self.event_names = [event.name for event in self.events]
+            print(self.event_names)
+            print(self.ch_names)
+
+        else:
+            reader = Spike2IO(filename=fname_str)
+            block = reader.read()[0]
+            segment = block.segments[0]
+            analog_signal = segment.analogsignals[0]
+            self.events = segment.events
+            self.event_names = [event.name for event in self.events]
+            print(self.event_names)
+            self.ch_names = analog_signal.array_annotations["channel_names"].tolist()
+            print(self.ch_names)
+            self.ch_dict = {name: i for i, name in enumerate(self.ch_names)}
+            self.fs = analog_signal.sampling_rate.magnitude
+            self.data = analog_signal.magnitude.T
 
     def get_event_timestamps(self, event_name: str) -> np.ndarray:
         """Returns timestamps of events with name ``event_name``"""

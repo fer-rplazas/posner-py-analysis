@@ -1,8 +1,13 @@
 .DS_Store
 .vscode/
+.claude/
+.antigravitycli/
 
-
-**/__pycache__/
+__pycache__/
 
 saved_models/
 outputs/
+
+# pixi environments
+.pixi/*
+!.pixi/config.toml
