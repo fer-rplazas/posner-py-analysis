@@ -126,13 +126,25 @@ class SmrImporter:
             import pickle
             from pathlib import Path
 
-            lib_dir = Path(__file__).parent
-            sonpy_python = lib_dir.parent / ".pixi" / "envs" / "sonpy" / "bin" / "python"
+            try:
+                lib_dir = Path(__file__).parent
+                res_path = subprocess.run(
+                    ["pixi", "run", "-e", "sonpy", "python", "-c", "import sys; print(sys.executable)"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    cwd=lib_dir.parent
+                )
+                sonpy_python = Path(res_path.stdout.strip())
+            except Exception as e:
+                raise RuntimeError(
+                    f"Failed to dynamically query pixi for the 'sonpy' python executable: {e}\n"
+                    "Make sure pixi is installed and you have run 'pixi install --all'."
+                )
 
             if not sonpy_python.exists():
                 raise FileNotFoundError(
-                    f"Could not find the 'sonpy' environment python binary at: {sonpy_python}\n"
-                    "Please make sure you have run 'pixi install --all' to set up both default and sonpy environments."
+                    f"Could not find the 'sonpy' environment python binary at: {sonpy_python}"
                 )
 
             # Subprocess python script to read SMRX using sonpy in the 3.9 environment
